@@ -21,7 +21,7 @@ pub fn load_obj(obj_file: &str) -> Vec<tobj::Model> {
     models
 }
 
-fn get_cam_scale(size: (i32, i32)) -> (f32, f32) {
+pub fn get_cam_scale(size: (i32, i32)) -> (f32, f32) {
     let aspect = size.0 as f32 / size.1 as f32;
 
     if aspect >= 1.0 {
@@ -33,7 +33,7 @@ fn get_cam_scale(size: (i32, i32)) -> (f32, f32) {
     }
 }
 
-pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid) {
+pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid, cam_pos: (f32, f32)) {
     if grid.cells.len() != grid.width * grid.height * 3 {
         println!("Grid length was not the proper length! Cells are dropped!");
     }
@@ -42,6 +42,7 @@ pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid) {
 
     let cam_scale = get_cam_scale((app.width, app.height));
     shader.set_vec2("cam_scale", [cam_scale.0 * 10.0, cam_scale.1 * 10.0]);
+    shader.set_vec2("cam_pos", [cam_pos.0, cam_pos.1]);
 
     //go through each of the grid cells, render a quad in the correct position with a color
     for (i, col) in grid.cells.chunks(3).enumerate() {

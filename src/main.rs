@@ -1,10 +1,20 @@
 use glint::{Window, Mesh, Shader};
-
+use glfw::MouseButton;
 mod renderer;
 mod generator;
+pub mod noise;
 
 use renderer::{ColorGrid, load_obj};
 use generator::{cell_grid_to_colors, gen_grid};
+
+fn screen_to_world(screen_delta: (f32, f32), window_size: (i32, i32)) -> (f32, f32) {
+    let cam_scale = renderer::get_cam_scale(window_size);
+
+    (
+        screen_delta.0 * cam_scale.0 * 1.1 / window_size.0 as f32,
+        -screen_delta.1 * cam_scale.1 * 2.0 / window_size.1 as f32,
+    )
+}
 
 fn main() {
     // Rendering and window stuff
@@ -15,6 +25,8 @@ fn main() {
 
     let quad_obj = load_obj("quad.obj")[0].mesh.clone();
     let quad = Mesh::new(quad_obj.positions, quad_obj.indices, 3);
+
+    let mut cam_pos = (0.0, 0.0);
 
     //Frames and deltatime
     let mut last_time = 0.0;
@@ -44,6 +56,13 @@ fn main() {
             frames = 0;
         }
 
+        //CAMERA DRAG
+        if app.input.is_mouse_held(MouseButton::Button1) {
+            let cam_mvmt = screen_to_world((app.input.mouse_delta.0 as f32, app.input.mouse_delta.1 as f32), (app.width, app.height));
+            cam_pos.0 -= cam_mvmt.0;
+            cam_pos.1 -= cam_mvmt.1;
+        }
+
         // ----- RENDERING -----
         let grid = ColorGrid {
             width: grid.width,
@@ -51,7 +70,7 @@ fn main() {
             cells: cell_grid_to_colors(&grid),
         };
 
-        renderer::render(&mut app, &shader, &quad, grid);
+        renderer::render(&mut app, &shader, &quad, grid, cam_pos);
 
         last_time = current_time;
     }

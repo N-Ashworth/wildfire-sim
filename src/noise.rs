@@ -40,17 +40,18 @@ fn value_noise(pos: (f32, f32), scale: f32) -> f32 {
     lerp(bottom, top, ty)
 }
 
-fn fbm(pos: (f32, f32)) -> f32 {
+pub fn fbm(pos: (f32, f32), scale: f32) -> f32 {
     let mut value = 0.0;
+    let mut max = 0.0;
     let mut amplitude = 0.5;
     let mut frequency = 1.0;
 
     for _ in 0..6 {
-        value += amplitude * value_noise(pos, frequency);
-
+        value += amplitude * value_noise(pos, frequency * scale);
+        max += amplitude;
         frequency *= 2.0;
         amplitude *= 0.5;
     }
 
-    value
+    value / max
 }

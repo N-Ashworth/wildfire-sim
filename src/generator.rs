@@ -1,4 +1,5 @@
 use rand::Rng;
+use crate::noise::{fbm};
 
 enum Cell {
     Land,
@@ -27,14 +28,13 @@ pub fn cell_grid_to_colors(grid: &CellGrid) -> Vec<f32> {
 }
 
 pub fn gen_grid(width: usize, height: usize) -> CellGrid {
-    let mut rng = rand::rng();
 
     let mut cells: Vec<Cell> = vec![];
 
     for i in 0..(width * height) {
-        let height = rng.random_range(0.0..10.0);
+        let height = fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.5);
 
-        if height < 4.0 {
+        if height < 0.2 {
             cells.push(Cell::Water);
         } else {
             cells.push(Cell::Land);
