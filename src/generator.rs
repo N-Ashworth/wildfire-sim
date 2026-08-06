@@ -38,26 +38,28 @@ will think it's an int (integer, no decimal) and throw an error.   */
 const MAX_ELEVATION: f32 = 50.0;
 
 //Fire spread and Extinguish
-const SPREAD_FACTOR: f32 = 1.0;
+const SPREAD_FACTOR: f32 = 10.0; //Constant multiplier on the spread chance
 
-const NEIGHBOR_SPREAD_FACTOR: f32 = 0.25;
-const WIND_SPREAD_FACTOR: f32 = 0.4;
+const NEIGHBOR_SPREAD_FACTOR: f32 = 0.25; //Multiplier on the chance of spreading from a neighbor cell
+const WIND_SPREAD_FACTOR: f32 = 0.4; //Multiplier on the chance of spreading from a downwind cell
 
 const NEIGHBOR_SPREAD_UPHILL_FACTOR: f32 = 0.125;
 const WIND_SPREAD_UPHILL_FACTOR: f32 = 0.2;
 
-const EXTINGUISH_FACTOR: f32 = 1.0;
+const EXTINGUISH_FACTOR: f32 = 1.0; //Constant multiplier on the extinguish chance
 
 //Oxygen, Fuel, and Moisture
-const OXYGEN_BURN_FACTOR: f32 = 3.0;
-const OXYGEN_REGROW_FACTOR: f32 = 0.003;
+const OXYGEN_BURN_FACTOR: f32 = 3.0; //Rate cells lose oxygen while on fire
+const OXYGEN_REGROW_FACTOR: f32 = 0.003; //Rate cells regain oxygen not on fire
 
-const FUEL_BURN_FACTOR: f32 = 0.2;
+const FUEL_BURN_FACTOR: f32 = 0.2; //Rate cells burn fuel while on fire
 
-const THERMAL_WIND_FACTOR: f32 = 1.0;
+const THERMAL_WIND_FACTOR: f32 = 1.0; //Multiplier on the effect of fire on the direction and strength of wind
+//(wind goes towards the fire)
 
-const MOISTURE_EVAPORATION_SPEED: f32 = 1.0;
-const MOISTURE_IGNITION_THRESHOLD: f32 = 0.5;
+const MOISTURE_EVAPORATION_SPEED: f32 = 1.0; //Multiplier on the rate moisture is evaporated next to a fire cell
+const BURNING_MOISTURE_EVAPORATION_SPEED: f32 = 1.0; //Multiplier on the rate moisture is burned when the cell is on fire
+const MOISTURE_IGNITION_THRESHOLD: f32 = 0.5; //Cells can only catch fire when their moisture is less than this value
 
 #[derive(Clone)]
 enum Cell {
@@ -80,50 +82,93 @@ fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
-fn cell_to_color(cell: &Cell) -> [f32; 3] {
+fn cell_to_color(cell: &Cell) -> [f32;3] {
     match *cell {
-        Cell::Water => [0.08, 0.25, 0.65],
+        Cell::Water => [0.08,0.25,0.65],
 
         Cell::Land {
             fire,
             o2,
-            wind: _,
             fuel,
             elevation,
-            moisture: _,
+            moisture,
+            ..
         } => {
+
             if fire {
-                // Burning: ember -> orange -> yellow -> white
-                let t = o2.clamp(0.0, 1.0);
 
-                let ember = [0.60, 0.08, 0.03];
-                let orange = [1.00, 0.45, 0.05];
-                let yellow = [1.00, 0.90, 0.25];
-                let white = [1.00, 0.98, 0.85];
+                // Fire intensity
+                let heat = (
+                    o2 * 0.7 +
+                    fuel * 0.3
+                ).clamp(0.0,1.0);
 
-                if t < 0.33 {
-                    lerp(ember, orange, t / 0.33)
-                } else if t < 0.66 {
-                    lerp(orange, yellow, (t - 0.33) / 0.33)
-                } else {
-                    lerp(yellow, white, (t - 0.66) / 0.34)
+                // Wet wood burns darker
+                let cooling = moisture.clamp(0.0,1.0);
+
+                let ember = [0.35,0.02,0.0];
+                let red = [1.0,0.05,0.0];
+                let orange = [1.0,0.45,0.02];
+                let yellow = [1.0,0.9,0.2];
+                let white = [1.0,1.0,0.8];
+
+                let mut col;
+
+                if heat < 0.25 {
+                    col = lerp(ember, red, heat/0.25);
                 }
+                else if heat < 0.55 {
+                    col = lerp(red, orange, (heat-0.25)/0.3);
+                }
+                else if heat < 0.8 {
+                    col = lerp(orange,yellow,(heat-0.55)/0.25);
+                }
+                else {
+                    col = lerp(yellow,white,(heat-0.8)/0.2);
+                }
+
+
+                // moisture reduces brightness
+                [
+                    col[0] * (1.0 - cooling*0.5),
+                    col[1] * (1.0 - cooling*0.7),
+                    col[2] * (1.0 - cooling*0.8),
+                ]
+
             } else {
-                // Burned -> Dry -> Healthy based on remaining fuel.
-                let t = fuel.clamp(0.0, 1.0);
 
-                let ash   = [0.20, 0.19, 0.18];
-                let dirt  = [0.34, 0.28, 0.20];
-                let grass = lerp([0.28, 0.50, 0.18], [1.0, 1.0, 1.0], elevation / MAX_ELEVATION);
-                let forest= lerp([0.10, 0.42, 0.10], [1.0, 1.0, 1.0], elevation / MAX_ELEVATION);
+                // dead/burnt terrain
+                let fuel_t = fuel.clamp(0.0,1.0);
+                let wet_t = moisture.clamp(0.0,1.0);
 
-                if t < 0.25 {
-                    lerp(ash, dirt, t / 0.25)
-                } else if t < 0.6 {
-                    lerp(dirt, grass, (t - 0.25) / 0.35)
-                } else {
-                    lerp(grass, forest, (t - 0.6) / 0.4)
-                }
+
+                let black = [0.02,0.015,0.01];
+                let brown = [0.35,0.18,0.05];
+                let green = [0.15,0.45,0.08];
+
+
+                // fuel controls vegetation
+                let vegetation =
+                    lerp(black,brown,fuel_t);
+
+                // moisture brings brown -> green
+                let vegetation =
+                    lerp(
+                        vegetation,
+                        green,
+                        wet_t
+                    );
+
+
+                // elevation shading
+                let shade =
+                    0.6 + 0.4*(elevation/MAX_ELEVATION);
+
+                [
+                    vegetation[0]*shade,
+                    vegetation[1]*shade,
+                    vegetation[2]*shade
+                ]
             }
         }
     }
@@ -324,11 +369,13 @@ impl CellGrid {
                         let spread_chance = (1.0 - (0.5_f32).powf(dt * fire_pressure)) * fuel;
                         let fire_spread = rng.random_range(0.0..1.0);
 
+                        let next_moisture = (moisture - MOISTURE_EVAPORATION_SPEED * fire_pressure * dt).max(0.0);
+
                         //raise oxygen + maybe catch on fire
                         let wind_str = wx * wx + wy * wy;
                         let next_oxy = (oxy + dt * OXYGEN_REGROW_FACTOR * wind_str).min(1.0);
                         let mut next_fire = false;
-                        if fire_spread < spread_chance {
+                        if fire_spread < spread_chance && moisture < MOISTURE_IGNITION_THRESHOLD {
                             next_fire = true;
                         }
 
@@ -349,7 +396,7 @@ impl CellGrid {
                         let wind_x = wx + thermal_wind_x * THERMAL_WIND_FACTOR * dt;
                         let wind_y = wy + thermal_wind_y * THERMAL_WIND_FACTOR * dt;
 
-                        next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wind_x, wind_y), fuel, elevation, moisture};
+                        next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wind_x, wind_y), fuel, elevation, moisture: next_moisture};
 
                     } else {
 
@@ -360,14 +407,15 @@ impl CellGrid {
 
                         //decrement oxygen + maybe extinguish
                         let wind_str = wx * wx + wy * wy;
-                        let next_oxy = (oxy - dt * OXYGEN_BURN_FACTOR / wind_str).max(0.0);
+                        let next_oxy = (oxy - dt * OXYGEN_BURN_FACTOR / wind_str.max(1.0)).max(0.0);
                         let next_fuel = (fuel - dt * FUEL_BURN_FACTOR).max(0.0);
+                        let next_moisture = (moisture - BURNING_MOISTURE_EVAPORATION_SPEED * dt).max(0.0);
                         let mut next_fire = true;
                         if ext < ext_chance {
                             next_fire = false;
                         }
 
-                        next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wx, wy), fuel: next_fuel, elevation, moisture};
+                        next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wx, wy), fuel: next_fuel, elevation, moisture: next_moisture};
                     }
 
                 },
