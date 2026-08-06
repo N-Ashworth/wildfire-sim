@@ -33,7 +33,7 @@ pub fn get_cam_scale(size: (i32, i32)) -> (f32, f32) {
     }
 }
 
-pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid, cam_pos: (f32, f32)) {
+pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid, cam_pos: (f32, f32), cam_zoom: f32) {
     if grid.cells.len() != grid.width * grid.height * 3 {
         println!("Grid length was not the proper length! Cells are dropped!");
     }
@@ -41,7 +41,7 @@ pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid, c
     app.clear_with_color(0.1, 0.1, 0.1);
 
     let cam_scale = get_cam_scale((app.width, app.height));
-    shader.set_vec2("cam_scale", [cam_scale.0 * 10.0, cam_scale.1 * 10.0]);
+    shader.set_vec2("cam_scale", [cam_scale.0 * 10.0 / cam_zoom, cam_scale.1 * 10.0 / cam_zoom]);
     shader.set_vec2("cam_pos", [cam_pos.0, cam_pos.1]);
 
     //go through each of the grid cells, render a quad in the correct position with a color
@@ -50,7 +50,7 @@ pub fn render(app: &mut Window, shader: &Shader, mesh: &Mesh, grid: ColorGrid, c
         let x = i % grid.width;
         let y = (i - x) / grid.width;
 
-        shader.set_vec2("position", [(x as f32) * 1.1, (y as f32) * -1.1]);
+        shader.set_vec2("position", [(x as f32), (y as f32) * -1.0]);
         shader.set_vec2("scale", [1.0, 1.0]);
         shader.set_vec3("color", [col[0], col[1], col[2]]);
 

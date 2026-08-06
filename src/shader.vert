@@ -9,6 +9,6 @@ uniform vec2 cam_pos;
 
 void main()
 {
-    vec3 pos = vec3((aPos.xy * scale + position) / cam_scale - cam_pos, aPos.z);
-    gl_Position = vec4(pos, 1.0);
+    vec2 world = aPos.xy * scale + position;
+    gl_Position = vec4((world - cam_pos) / cam_scale, aPos.z, 1.0);
 }
