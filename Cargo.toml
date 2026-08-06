@@ -1,0 +1,9 @@
+[package]
+name = "wildfire_sim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tobj = "4.0"
+rand = "0.9"
+glint = { path = "../glint" }
