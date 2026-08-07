@@ -1,5 +1,7 @@
 use crate::noise::{fbm};
 use rand::Rng;
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
 
 /*  HOW THE SIMULATION WORKS
 This simulation is a Cellular Automata. That means it's a grid of cells (pixels basically)
@@ -34,11 +36,17 @@ will think it's an int (integer, no decimal) and throw an error.   */
 
 // ----- GLOBAL SIMULATION PARAMETERS -----
 
-//Generation
+//--Random numbers / seeding (0 = random each time!)--
+const TERRAIN_SEED: u64 = 0;
+const FIRE_SEED: u64 = 0;
+
+//--Generation--
 const MAX_ELEVATION: f32 = 50.0;
 
-//Fire spread and Extinguish
-const SPREAD_FACTOR: f32 = 10.0; //Constant multiplier on the spread chance
+const WATER_LEVEL: f32 = 13.0;
+
+//--Fire spread and Extinguish--
+const SPREAD_FACTOR: f32 = 1.0; //Constant multiplier on the spread chance
 
 const NEIGHBOR_SPREAD_FACTOR: f32 = 0.25; //Multiplier on the chance of spreading from a neighbor cell
 const WIND_SPREAD_FACTOR: f32 = 0.4; //Multiplier on the chance of spreading from a downwind cell
@@ -48,14 +56,14 @@ const WIND_SPREAD_UPHILL_FACTOR: f32 = 0.2;
 
 const EXTINGUISH_FACTOR: f32 = 1.0; //Constant multiplier on the extinguish chance
 
-//Oxygen, Fuel, and Moisture
+//--Oxygen, Fuel, and Moisture--
 const OXYGEN_BURN_FACTOR: f32 = 3.0; //Rate cells lose oxygen while on fire
 const OXYGEN_REGROW_FACTOR: f32 = 0.003; //Rate cells regain oxygen not on fire
 
 const FUEL_BURN_FACTOR: f32 = 0.2; //Rate cells burn fuel while on fire
 
 const THERMAL_WIND_FACTOR: f32 = 1.0; //Multiplier on the effect of fire on the direction and strength of wind
-//(wind goes towards the fire)
+    //(wind goes towards the fire)
 
 const MOISTURE_EVAPORATION_SPEED: f32 = 1.0; //Multiplier on the rate moisture is evaporated next to a fire cell
 const BURNING_MOISTURE_EVAPORATION_SPEED: f32 = 1.0; //Multiplier on the rate moisture is burned when the cell is on fire
@@ -112,7 +120,7 @@ fn cell_to_color(cell: &Cell) -> [f32;3] {
                 let yellow = [1.0,0.9,0.2];
                 let white = [1.0,1.0,0.8];
 
-                let mut col;
+                let col;
 
                 if heat < 0.25 {
                     col = lerp(ember, red, heat/0.25);
@@ -179,6 +187,8 @@ pub struct CellGrid {
     pub width: usize,
     pub height: usize,
     cells: Vec<Cell>,
+    rng: SmallRng,
+    embers: Vec<(usize, usize)>,
 }
 
 impl CellGrid {
@@ -303,6 +313,20 @@ impl CellGrid {
         cells
     }
 
+    fn fire_heat(&self, x: usize, y: usize) -> f32 {
+        let cell = self.cells[self.coord_to_index(x, y)].clone();
+
+        let mut heat = self.burning_neighbors_in_radius(x, y, 2).len() as f32; //max = 24
+
+        heat += match cell {
+            Cell::Land {fire: true, o2, wind: _, fuel, elevation: _, moisture} => o2 * fuel - moisture * 0.5,
+            _ => 0.0,
+        } * 10.0;
+        //max = 10
+
+        heat / 34.0 //normalize to 0-1
+    }
+
     fn calculate_slope_effect(&mut self, x1: usize, y1: usize, x2: usize, y2: usize) -> f32 {
         //calculate slope, find factor
         let cell1 = &self.cells[self.coord_to_index(x1, y1)];
@@ -332,8 +356,10 @@ impl CellGrid {
 
     pub fn update(&mut self, dt: f32) -> Self{
 
-        let mut rng = rand::rng();
+        let mut rng = self.rng.clone();
         let mut next = self.clone();
+
+        next.embers = vec![];
 
         for i in 0..self.cells.len() {
 
@@ -369,7 +395,9 @@ impl CellGrid {
                         let spread_chance = (1.0 - (0.5_f32).powf(dt * fire_pressure)) * fuel;
                         let fire_spread = rng.random_range(0.0..1.0);
 
-                        let next_moisture = (moisture - MOISTURE_EVAPORATION_SPEED * fire_pressure * dt).max(0.0);
+                        let heat = fire_pressure + 3.0 * self.burning_neighbors_in_radius(x, y, 3).len() as f32 / 48.0; 
+
+                        let next_moisture = (moisture - MOISTURE_EVAPORATION_SPEED * heat * dt).max(0.0);
 
                         //raise oxygen + maybe catch on fire
                         let wind_str = wx * wx + wy * wy;
@@ -393,14 +421,44 @@ impl CellGrid {
                             thermal_wind_y += dy / dist_sq;
                         }
 
-                        let wind_x = wx + thermal_wind_x * THERMAL_WIND_FACTOR * dt;
-                        let wind_y = wy + thermal_wind_y * THERMAL_WIND_FACTOR * dt;
+                        let mut wind_x = wx + thermal_wind_x * THERMAL_WIND_FACTOR * dt;
+                        let mut wind_y = wy + thermal_wind_y * THERMAL_WIND_FACTOR * dt;
+
+                        let mut sum_wind = (wind_x, wind_y);
+                        let mut n_ct = 1;
+
+                        //Make wind in adjacent cells similar
+                        for n in self.neighbors(x, y) {
+                            match self.cells[self.coord_to_index(n.0, n.1)] {
+                                Cell::Land{fire: _, o2: _, fuel: _, wind, moisture: _, elevation: _ } => {
+                                    sum_wind.0 += wind.0;
+                                    sum_wind.1 += wind.1;
+
+                                    n_ct += 1;
+                                },
+                                _ => {},
+                            }
+                        }
+
+                        let avg_wind = (sum_wind.0 / (n_ct as f32), sum_wind.1 / (n_ct as f32));
+
+                        //lerp the wind to the average wind slowly - 0.95 current wind per second
+                        wind_x += 1.0 - (1.0 - (avg_wind.0 - wind_x) * 0.05).powf(dt);
+                        wind_y += 1.0 - (1.0 - (avg_wind.1 - wind_y) * 0.05).powf(dt);
+
+
+                        //Update embers
+                        if self.embers.contains(&(x, y)) {
+                            next_fire = true;
+                        }
 
                         next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wind_x, wind_y), fuel, elevation, moisture: next_moisture};
 
                     } else {
 
                         //on fire
+                        let (x, y) = self.index_to_coord(i);
+
                         let ext_chance = 1.0 - (oxy * fuel).powf(dt * EXTINGUISH_FACTOR);
 
                         let ext = rng.random_range(0.0..1.0);
@@ -415,6 +473,16 @@ impl CellGrid {
                             next_fire = false;
                         }
 
+                        //maybe launch an ember into the air
+                        let heat = self.fire_heat(x, y);
+
+                        let ember_launch = rng.random_range(0.0..1.0);
+                        let ember_chance = 1.0 - (1.0 - heat.powi(3)).powf(dt);
+                        if ember_launch < ember_chance {
+                            let ember_power = rng.random_range(0.3..2.5);
+                            next.embers.push((((x as i32) + (wx * ember_power).round() as i32) as usize, ((y as i32 + (wy * ember_power).round() as i32) as i32) as usize));
+                        }
+
                         next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wx, wy), fuel: next_fuel, elevation, moisture: next_moisture};
                     }
 
@@ -423,7 +491,31 @@ impl CellGrid {
             }
         }
 
+        next.rng = rng;
         next
+    }
+
+    pub fn start_fire(&mut self, x: usize, y: usize) {
+        if x > self.width - 1 || y > self.height - 1 {
+            return;
+        }
+        let idx = self.coord_to_index(x, y);
+
+        if let Cell::Land { fire, .. } = &mut self.cells[idx] {
+            *fire = true;
+        }
+    }
+
+    pub fn douse_fire(&mut self, x: usize, y: usize, dt: f32) {
+        if x > self.width - 1 || y > self.height - 1 {
+            return;
+        }
+        let idx = self.coord_to_index(x, y);
+
+        if let Cell::Land { fire, moisture, .. } = &mut self.cells[idx] {
+            *fire = false;
+            *moisture = 1.0;
+        }
     }
 }
 
@@ -436,30 +528,24 @@ pub fn cell_grid_to_colors(grid: &CellGrid) -> Vec<f32> {
 }
 
 pub fn gen_grid(width: usize, height: usize) -> CellGrid {
-    let mut rng = rand::rng();
 
     let mut cells: Vec<Cell> = vec![];
 
-    let mut seen_fire = false;
+    let seed = if TERRAIN_SEED > 0 {TERRAIN_SEED} else {rand::random::<u64>()};
 
     for i in 0..(width * height) {
 
-        let height = fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1);
+        let height = fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1, seed);
 
-        if height < 0.2 {
+        if height < WATER_LEVEL / MAX_ELEVATION {
             cells.push(Cell::Water);
         } else {
-            let fire = !seen_fire;
-
-            if fire {
-                seen_fire = true;
-            }
 
             let wind = (
-                -(fbm((i as f32 % width as f32 + 500.0, (i as i32 / width as i32) as f32 + 500.0), 0.1) * 10.0 - 5.0), 
-                -(fbm((i as f32 % width as f32 + 1000.0, (i as i32 / width as i32) as f32  + 1000.0), 0.1) * 10.0 - 5.0));
+                -(fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1, seed + 1) * 10.0 - 5.0), 
+                -(fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1, seed + 2) * 10.0 - 5.0));
 
-            cells.push(Cell::Land {fire, o2: 1.0, wind, fuel: 1.0, elevation: (height - 0.2) * MAX_ELEVATION, moisture: 1.0});
+            cells.push(Cell::Land {fire: false, o2: 1.0, wind, fuel: 1.0, elevation: height * MAX_ELEVATION - WATER_LEVEL, moisture: 1.0});
             
         }
     }
@@ -468,5 +554,7 @@ pub fn gen_grid(width: usize, height: usize) -> CellGrid {
         width,
         height,
         cells,
+        rng: SmallRng::seed_from_u64(if FIRE_SEED > 0 {FIRE_SEED} else {rand::random::<u64>()}),
+        embers: vec![],
     }
 }
