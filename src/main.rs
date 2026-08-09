@@ -59,7 +59,7 @@ fn main() {
 	let mut frames = 0;
 
 	//Global variables
-	let mut grid = gen_grid(50, 50);
+	let mut grid = gen_grid(100, 100);
 
 	//Main loop
 	while app.running() {
@@ -158,7 +158,7 @@ fn main() {
 		}
 
 		if app.input.is_key_pressed(Key::R) {
-			grid = gen_grid(50, 50);
+			grid = gen_grid(100, 100);
 			changed = true;
 		}
 

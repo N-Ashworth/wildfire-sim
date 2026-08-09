@@ -42,19 +42,21 @@ const FIRE_SEED: u64 = 0;
 
 //--Generation--
 const MAX_ELEVATION: f32 = 50.0;
-
 const WATER_LEVEL: f32 = 13.0;
+
+const TERRAIN_SCALE: f32 = 0.05;
 
 //--Fire spread and Extinguish--
 const SPREAD_FACTOR: f32 = 1.0; //Constant multiplier on the spread chance
 
-const NEIGHBOR_SPREAD_FACTOR: f32 = 0.25; //Multiplier on the chance of spreading from a neighbor cell
-const WIND_SPREAD_FACTOR: f32 = 0.4; //Multiplier on the chance of spreading from a downwind cell
+const NEIGHBOR_SPREAD_FACTOR: f32 = 0.2; //Multiplier on the chance of spreading from a neighbor cell
+const WIND_SPREAD_FACTOR: f32 = 0.9; //Multiplier on the chance of spreading from a downwind cell
 
-const NEIGHBOR_SPREAD_UPHILL_FACTOR: f32 = 0.125;
-const WIND_SPREAD_UPHILL_FACTOR: f32 = 0.2;
+const NEIGHBOR_SPREAD_UPHILL_FACTOR: f32 = 0.00;
 
-const EXTINGUISH_FACTOR: f32 = 1.0; //Constant multiplier on the extinguish chance
+const EXTINGUISH_FACTOR: f32 = 1.4; //Constant multiplier on the extinguish chance
+
+const EMBER_CHANCE_FACTOR: f32 = 0.03;
 
 //--Oxygen, Fuel, and Moisture--
 const OXYGEN_BURN_FACTOR: f32 = 3.0; //Rate cells lose oxygen while on fire
@@ -62,25 +64,14 @@ const OXYGEN_REGROW_FACTOR: f32 = 0.003; //Rate cells regain oxygen not on fire
 
 const FUEL_BURN_FACTOR: f32 = 0.2; //Rate cells burn fuel while on fire
 
+const GLOBAL_WIND_X: f32 = 0.0;
+const GLOBAL_WIND_Y: f32 = 5.0;
 const THERMAL_WIND_FACTOR: f32 = 1.0; //Multiplier on the effect of fire on the direction and strength of wind
     //(wind goes towards the fire)
 
 const MOISTURE_EVAPORATION_SPEED: f32 = 1.0; //Multiplier on the rate moisture is evaporated next to a fire cell
 const BURNING_MOISTURE_EVAPORATION_SPEED: f32 = 1.0; //Multiplier on the rate moisture is burned when the cell is on fire
 const MOISTURE_IGNITION_THRESHOLD: f32 = 0.5; //Cells can only catch fire when their moisture is less than this value
-
-#[derive(Clone)]
-enum Cell {
-    Land {
-        fire: bool,
-        o2: f32,
-        wind: (f32, f32),
-        fuel: f32,
-        elevation: f32,
-        moisture: f32,
-    },
-    Water,
-}
 
 fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [
@@ -90,95 +81,90 @@ fn lerp(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
-fn cell_to_color(cell: &Cell) -> [f32;3] {
-    match *cell {
-        Cell::Water => [0.08,0.25,0.65],
+fn cell_to_color(grid: &CellGrid, i: usize) -> [f32;3] {
+    if grid.cell_land[i] {
+        let o2 = grid.cell_o2[i];
+        let fuel = grid.cell_fuel[i];
+        let moisture = grid.cell_moisture[i];
+        let elevation = grid.cell_elevation[i];
 
-        Cell::Land {
-            fire,
-            o2,
-            fuel,
-            elevation,
-            moisture,
-            ..
-        } => {
+        if grid.cell_fire[i] {
 
-            if fire {
+            // Fire intensity
+            let heat = (
+                o2 * 0.7 +
+                fuel * 0.3
+            ).clamp(0.0,1.0);
 
-                // Fire intensity
-                let heat = (
-                    o2 * 0.7 +
-                    fuel * 0.3
-                ).clamp(0.0,1.0);
+            // Wet wood burns darker
+            let cooling = moisture.clamp(0.0,1.0);
 
-                // Wet wood burns darker
-                let cooling = moisture.clamp(0.0,1.0);
+            let ember = [0.35,0.02,0.0];
+            let red = [1.0,0.05,0.0];
+            let orange = [1.0,0.45,0.02];
+            let yellow = [1.0,0.9,0.2];
+            let white = [1.0,1.0,0.8];
 
-                let ember = [0.35,0.02,0.0];
-                let red = [1.0,0.05,0.0];
-                let orange = [1.0,0.45,0.02];
-                let yellow = [1.0,0.9,0.2];
-                let white = [1.0,1.0,0.8];
+            let col;
 
-                let col;
-
-                if heat < 0.25 {
-                    col = lerp(ember, red, heat/0.25);
-                }
-                else if heat < 0.55 {
-                    col = lerp(red, orange, (heat-0.25)/0.3);
-                }
-                else if heat < 0.8 {
-                    col = lerp(orange,yellow,(heat-0.55)/0.25);
-                }
-                else {
-                    col = lerp(yellow,white,(heat-0.8)/0.2);
-                }
-
-
-                // moisture reduces brightness
-                [
-                    col[0] * (1.0 - cooling*0.5),
-                    col[1] * (1.0 - cooling*0.7),
-                    col[2] * (1.0 - cooling*0.8),
-                ]
-
-            } else {
-
-                // dead/burnt terrain
-                let fuel_t = fuel.clamp(0.0,1.0);
-                let wet_t = moisture.clamp(0.0,1.0);
-
-
-                let black = [0.02,0.015,0.01];
-                let brown = [0.35,0.18,0.05];
-                let green = [0.15,0.45,0.08];
-
-
-                // fuel controls vegetation
-                let vegetation =
-                    lerp(black,brown,fuel_t);
-
-                // moisture brings brown -> green
-                let vegetation =
-                    lerp(
-                        vegetation,
-                        green,
-                        wet_t
-                    );
-
-
-                // elevation shading
-                let shade =
-                    0.6 + 0.4*(elevation/MAX_ELEVATION);
-
-                [
-                    vegetation[0]*shade,
-                    vegetation[1]*shade,
-                    vegetation[2]*shade
-                ]
+            if heat < 0.25 {
+                col = lerp(ember, red, heat/0.25);
             }
+            else if heat < 0.55 {
+                col = lerp(red, orange, (heat-0.25)/0.3);
+            }
+            else if heat < 0.8 {
+                col = lerp(orange, yellow,(heat-0.55)/0.25);
+            }
+            else {
+                col = lerp(yellow, white,(heat-0.8)/0.2);
+            }
+
+
+            // moisture reduces brightness
+            [
+                col[0] * (1.0 - cooling*0.5),
+                col[1] * (1.0 - cooling*0.7),
+                col[2] * (1.0 - cooling*0.8),
+            ]
+
+        } else {
+
+            // dead/burnt terrain
+            let fuel_t = fuel.clamp(0.0,1.0);
+            let wet_t = moisture.clamp(0.0,1.0);
+
+
+            let black = [0.02,0.015,0.01];
+            let brown = [0.35,0.18,0.05];
+            let green = [0.15,0.45,0.08];
+
+
+            // fuel controls vegetation
+            let vegetation =
+                lerp(black,brown,fuel_t);
+
+            // moisture brings brown -> green
+            let vegetation =
+                lerp(
+                    vegetation,
+                    green,
+                    wet_t
+                );
+
+
+            // elevation shading
+            let shade =
+                0.6 + 0.4*(elevation/MAX_ELEVATION);
+
+            [
+                vegetation[0]*shade,
+                vegetation[1]*shade,
+                vegetation[2]*shade
+            ]
         }
+    } else {
+        [0.08,0.25,0.65]
     }
 }
 
@@ -186,7 +172,17 @@ fn cell_to_color(cell: &Cell) -> [f32;3] {
 pub struct CellGrid {
     pub width: usize,
     pub height: usize,
-    cells: Vec<Cell>,
+    cell_land: Vec<bool>,
+    cell_fire: Vec<bool>,
+    cell_o2: Vec<f32>,
+    cell_wind: Vec<(f32, f32)>,
+    cell_fuel: Vec<f32>,
+    cell_elevation: Vec<f32>,
+    cell_moisture: Vec<f32>,
+    cell_slope_x_neg: Vec<f32>,
+    cell_slope_x_pos: Vec<f32>,
+    cell_slope_y_neg: Vec<f32>,
+    cell_slope_y_pos: Vec<f32>,
     rng: SmallRng,
     embers: Vec<(usize, usize)>,
 }
@@ -203,56 +199,13 @@ impl CellGrid {
         x + y * self.width
     }
 
-    fn neighbors(&self, x: usize, y: usize) -> Vec<(usize, usize)> {
-        let mut dirs: Vec<(isize, isize)> = vec![];
-
-        let left_edge = x <= 0;
-        let right_edge = x >= self.width - 1;
-        let top_edge = y <= 0;
-        let bottom_edge = y >= self.height - 1;
-
-        if !left_edge {
-            dirs.push((-1, 0));
-        }
-        if !right_edge {
-            dirs.push((1, 0));
-        }
-        if !top_edge {
-            dirs.push((0, -1));
-        }
-        if !bottom_edge {
-            dirs.push((0, 1));
-        }
-
-        if !left_edge && !top_edge {
-            dirs.push((-1, -1));
-        }
-        if !top_edge && !right_edge {
-            dirs.push((1, -1));
-        }
-        if !right_edge && !bottom_edge {
-            dirs.push((1, 1));
-        }
-        if !bottom_edge && !left_edge {
-            dirs.push((-1, 1));
-        }
-
-        let mut ns = vec![];
-
-        for d in dirs {
-            ns.push(((x as isize + d.0) as usize, (y as isize + d.1) as usize));
-        }
-
-        ns
-    }
-
     fn wind_neighbors(&self, x: usize, y: usize) -> Vec<((usize, usize), f32)> {
         let mut cells = Vec::new();
 
-        let (wx, wy) = match self.cells[self.coord_to_index(x, y)] {
-            Cell::Land { wind, .. } => wind,
-            Cell::Water => return cells,
-        };
+        let (mut wx, mut wy) = self.cell_wind[self.coord_to_index(x, y)];
+
+        wx += GLOBAL_WIND_X;
+        wy += GLOBAL_WIND_Y;
 
         let len = (wx * wx + wy * wy).sqrt();
 
@@ -284,65 +237,38 @@ impl CellGrid {
         cells
     }
 
-    fn burning_neighbors_in_radius(&self, x: usize, y: usize, r: usize) -> Vec<(usize, usize)> {
-        let mut cells: Vec<(usize, usize)> = vec![];
+    fn calculate_slope_effect(&mut self, x1: usize, y1: usize, x2: usize, y2: usize) -> f32 {
+        //check if its the same cell
+        if x1 == x2 && y1 == y2 { return 0.0; };
 
-        let borders_x = (
-            if r > x {0} else {x - r},
-            if r + x > self.width {self.width} else {r + x},
-        );
-        let borders_y = (
-            if r > y {0} else {y - r},
-            if r + y > self.height {self.height} else {r + y},
-        );
-        for nx in borders_x.0..borders_x.1 {
-            for ny in borders_y.0..borders_y.1 {
-                if nx == x && ny == y {
-                    continue;
-                }
+        //if the cells are adjacent, use the precomputed value!
+        let adjacent = (x1 as isize - x2 as isize).abs() + (y1 as isize - y2 as isize).abs() == 1;
 
-                match self.cells[self.coord_to_index(nx, ny)] {
-                    Cell::Land{ fire: true, .. } => {
-                        cells.push((nx, ny));
-                    }
-                    _ => {}
-                }
+        if adjacent {
+            if (x1 as isize - x2 as isize) == 1 {
+
             }
+            if (x1 as isize - x2 as isize) == -1 {
+                
+            }
+            if (y1 as isize - y2 as isize) == 1 {
+                
+            }
+            if (y1 as isize - y2 as isize) == -1 {
+                
+            }
+
         }
 
-        cells
-    }
-
-    fn fire_heat(&self, x: usize, y: usize) -> f32 {
-        let cell = self.cells[self.coord_to_index(x, y)].clone();
-
-        let mut heat = self.burning_neighbors_in_radius(x, y, 2).len() as f32; //max = 24
-
-        heat += match cell {
-            Cell::Land {fire: true, o2, wind: _, fuel, elevation: _, moisture} => o2 * fuel - moisture * 0.5,
-            _ => 0.0,
-        } * 10.0;
-        //max = 10
-
-        heat / 34.0 //normalize to 0-1
-    }
-
-    fn calculate_slope_effect(&mut self, x1: usize, y1: usize, x2: usize, y2: usize) -> f32 {
         //calculate slope, find factor
-        let cell1 = &self.cells[self.coord_to_index(x1, y1)];
-        let cell2 = &self.cells[self.coord_to_index(x2, y2)];
+        let cell1 = self.coord_to_index(x1, y1);
+        let cell2 = self.coord_to_index(x2, y2);
 
         let run_squared = (x1 as f32 - x2 as f32).powi(2) + (y1 as f32 - y2 as f32).powi(2);
 
-        let elev1 = match cell1 {
-            Cell::Land {fire: _, o2: _, wind: _, fuel: _, elevation, moisture: _} => *elevation,
-            Cell::Water => 0.0,
-        };
+        let elev1 = self.cell_elevation[cell1];
 
-        let elev2 = match cell2 {
-            Cell::Land {fire: _, o2: _, wind: _, fuel: _, elevation, moisture: _} => *elevation,
-            Cell::Water => 0.0,
-        };
+        let elev2 = self.cell_elevation[cell2];
 
         let rise = elev1 - elev2;
 
@@ -361,135 +287,213 @@ impl CellGrid {
 
         next.embers = vec![];
 
-        for i in 0..self.cells.len() {
+        for i in 0..(self.width * self.height) {
 
-            match self.cells[i] {
+            if self.cell_land[i] {
+                let (x, y) = self.index_to_coord(i);
+                let wnbrs = self.wind_neighbors(x, y);
 
-                Cell::Land { fire: f, o2: oxy, wind: (wx, wy), fuel, elevation, moisture} => {
+                let (wx, wy) = self.cell_wind[i];
+                let f = self.cell_fire[i];
+                let fuel = self.cell_fuel[i];
+                let moisture = self.cell_moisture[i];
+                let oxy = self.cell_o2[i];
 
-                    if !f {
-                        //not on fire
-                        let (x, y) = self.index_to_coord(i);
+                if !f {
+                    //update wind
+                    let mut burning_count = 0;
+                    let mut thermal_x = 0.0;
+                    let mut thermal_y = 0.0;
 
-                        let mut fire_pressure = 0.0;
+                    for dy in -3..=3 {
+                        for dx in -3..=3 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
 
-                        // Normal neighbors
-                        for n in self.neighbors(x, y) {
+                            let nx = x as isize + dx;
+                            let ny = y as isize + dy;
 
-                            if let Cell::Land { fire: true, .. } = self.cells[self.coord_to_index(n.0, n.1)] {
+                            if nx < 0 || ny < 0
+                                || nx >= self.width as isize
+                                || ny >= self.height as isize
+                            {
+                                continue;
+                            }
+
+                            let ni = nx as usize + ny as usize * self.width;
+
+                            if self.cell_fire[ni] {
+                                burning_count += 1;
+
+                                let dist_sq = (dx * dx + dy * dy) as f32;
+
+                                thermal_x += dx as f32 / dist_sq;
+                                thermal_y += dy as f32 / dist_sq;
+                            }
+                        }
+                    }
+                    let twx = wx + GLOBAL_WIND_X;
+                    let twy = wy + GLOBAL_WIND_Y;
+
+                    //not on fire
+                    let mut fire_pressure = 0.0;
+
+                    let mut wind_x = wx + thermal_x * THERMAL_WIND_FACTOR * dt;
+                    let mut wind_y = wy + thermal_y * THERMAL_WIND_FACTOR * dt;
+
+                    let mut sum_wind = (wind_x, wind_y);
+                    let mut n_ct = 1;
+
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+
+                            let nx = x as isize + dx;
+                            let ny = y as isize + dy;
+
+                            if nx < 0
+                                || ny < 0
+                                || nx >= self.width as isize
+                                || ny >= self.height as isize
+                            {
+                                continue;
+                            }
+
+                            let ni = nx as usize + ny as usize * self.width;
+
+                            let wind = self.cell_wind[ni];
+                            sum_wind.0 += wind.0;
+                            sum_wind.1 += wind.1;
+                            n_ct += 1;
+
+                            if self.cell_fire[ni] {
                                 fire_pressure += NEIGHBOR_SPREAD_FACTOR;
-                                fire_pressure += self.calculate_slope_effect(x, y, n.0, n.1) * NEIGHBOR_SPREAD_UPHILL_FACTOR;
+                                fire_pressure += self.calculate_slope_effect(
+                                    x,
+                                    y,
+                                    nx as usize,
+                                    ny as usize,
+                                ) * NEIGHBOR_SPREAD_UPHILL_FACTOR;
                             }
                         }
-
-                        // Wind neighbors
-                        for (n, weight) in self.wind_neighbors(x, y) {
-                            if let Cell::Land { fire: true, .. } = self.cells[self.coord_to_index(n.0, n.1)] {
-                                fire_pressure += WIND_SPREAD_FACTOR * weight;
-                                fire_pressure += self.calculate_slope_effect(x, y, n.0, n.1) * WIND_SPREAD_UPHILL_FACTOR;
-                            }
-                        }
-
-                        fire_pressure *= SPREAD_FACTOR;
-
-                        let spread_chance = (1.0 - (0.5_f32).powf(dt * fire_pressure)) * fuel;
-                        let fire_spread = rng.random_range(0.0..1.0);
-
-                        let heat = fire_pressure + 3.0 * self.burning_neighbors_in_radius(x, y, 3).len() as f32 / 48.0; 
-
-                        let next_moisture = (moisture - MOISTURE_EVAPORATION_SPEED * heat * dt).max(0.0);
-
-                        //raise oxygen + maybe catch on fire
-                        let wind_str = wx * wx + wy * wy;
-                        let next_oxy = (oxy + dt * OXYGEN_REGROW_FACTOR * wind_str).min(1.0);
-                        let mut next_fire = false;
-                        if fire_spread < spread_chance && moisture < MOISTURE_IGNITION_THRESHOLD {
-                            next_fire = true;
-                        }
-
-                        //update wind
-                        let mut thermal_wind_x = 0.0;
-                        let mut thermal_wind_y = 0.0;
-
-                        for n_coord in self.burning_neighbors_in_radius(x, y, 3) {
-                            let dx = n_coord.0 as f32 - x as f32;
-                            let dy = n_coord.1 as f32 - y as f32;
-                            let dist_sq = dx * dx + dy * dy;
-                            
-                            // Air rushes TOWARD the fire
-                            thermal_wind_x += dx / dist_sq;
-                            thermal_wind_y += dy / dist_sq;
-                        }
-
-                        let mut wind_x = wx + thermal_wind_x * THERMAL_WIND_FACTOR * dt;
-                        let mut wind_y = wy + thermal_wind_y * THERMAL_WIND_FACTOR * dt;
-
-                        let mut sum_wind = (wind_x, wind_y);
-                        let mut n_ct = 1;
-
-                        //Make wind in adjacent cells similar
-                        for n in self.neighbors(x, y) {
-                            match self.cells[self.coord_to_index(n.0, n.1)] {
-                                Cell::Land{fire: _, o2: _, fuel: _, wind, moisture: _, elevation: _ } => {
-                                    sum_wind.0 += wind.0;
-                                    sum_wind.1 += wind.1;
-
-                                    n_ct += 1;
-                                },
-                                _ => {},
-                            }
-                        }
-
-                        let avg_wind = (sum_wind.0 / (n_ct as f32), sum_wind.1 / (n_ct as f32));
-
-                        //lerp the wind to the average wind slowly - 0.95 current wind per second
-                        wind_x += 1.0 - (1.0 - (avg_wind.0 - wind_x) * 0.05).powf(dt);
-                        wind_y += 1.0 - (1.0 - (avg_wind.1 - wind_y) * 0.05).powf(dt);
-
-
-                        //Update embers
-                        if self.embers.contains(&(x, y)) {
-                            next_fire = true;
-                        }
-
-                        next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wind_x, wind_y), fuel, elevation, moisture: next_moisture};
-
-                    } else {
-
-                        //on fire
-                        let (x, y) = self.index_to_coord(i);
-
-                        let ext_chance = 1.0 - (oxy * fuel).powf(dt * EXTINGUISH_FACTOR);
-
-                        let ext = rng.random_range(0.0..1.0);
-
-                        //decrement oxygen + maybe extinguish
-                        let wind_str = wx * wx + wy * wy;
-                        let next_oxy = (oxy - dt * OXYGEN_BURN_FACTOR / wind_str.max(1.0)).max(0.0);
-                        let next_fuel = (fuel - dt * FUEL_BURN_FACTOR).max(0.0);
-                        let next_moisture = (moisture - BURNING_MOISTURE_EVAPORATION_SPEED * dt).max(0.0);
-                        let mut next_fire = true;
-                        if ext < ext_chance {
-                            next_fire = false;
-                        }
-
-                        //maybe launch an ember into the air
-                        let heat = self.fire_heat(x, y);
-
-                        let ember_launch = rng.random_range(0.0..1.0);
-                        let ember_chance = 1.0 - (1.0 - heat.powi(3)).powf(dt);
-                        if ember_launch < ember_chance {
-                            let ember_power = rng.random_range(0.3..2.5);
-                            next.embers.push((((x as i32) + (wx * ember_power).round() as i32) as usize, ((y as i32 + (wy * ember_power).round() as i32) as i32) as usize));
-                        }
-
-                        next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wx, wy), fuel: next_fuel, elevation, moisture: next_moisture};
                     }
 
-                },
-                _ => {}
+                    //Make wind in adjacent cells similar
+
+                    let avg_wind = (sum_wind.0 / (n_ct as f32), sum_wind.1 / (n_ct as f32));
+
+                    //lerp the wind to the average wind slowly - 0.95 current wind per second
+                    let alpha = 1.0 - (-1.0 * dt).exp();
+
+                    wind_x += (avg_wind.0 - wind_x) * alpha;
+                    wind_y += (avg_wind.1 - wind_y) * alpha;
+
+                    // Wind neighbors
+                    for (n, weight) in wnbrs {
+                        if self.cell_fire[self.coord_to_index(n.0, n.1)] {
+                            fire_pressure += WIND_SPREAD_FACTOR * weight;
+                        }
+                    }
+
+                    fire_pressure *= SPREAD_FACTOR;
+
+                    let spread_chance = (1.0 - (0.5_f32).powf(dt * fire_pressure)) * fuel;
+                    let fire_spread = rng.random_range(0.0..1.0);
+
+                    let heat = fire_pressure + 3.0 * burning_count as f32 / 48.0; 
+
+                    let next_moisture = (moisture - MOISTURE_EVAPORATION_SPEED * heat * dt).max(0.0);
+
+                    //raise oxygen + maybe catch on fire
+                    let wind_str = twx * twx + twy * twy;
+                    let next_oxy = (oxy + dt * OXYGEN_REGROW_FACTOR * wind_str).min(1.0);
+                    let mut next_fire = false;
+                    if fire_spread < spread_chance && moisture < MOISTURE_IGNITION_THRESHOLD {
+                        next_fire = true;
+                    }
+
+                    //Update embers
+                    if self.embers.contains(&(x, y)) {
+                        next_fire = true;
+                    }
+
+                    //next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wind_x, wind_y), fuel, elevation, moisture: next_moisture};
+                    next.cell_fire[i] = next_fire;
+                    next.cell_o2[i] = next_oxy;
+                    next.cell_wind[i] = (wind_x, wind_y);
+                    next.cell_moisture[i] = next_moisture;
+
+                } else {
+
+                    //on fire
+                    let (x, y) = self.index_to_coord(i);
+
+                    let ext_chance = 1.0 - (oxy * fuel).powf(dt * EXTINGUISH_FACTOR);
+
+                    let ext = rng.random_range(0.0..1.0);
+
+                    let twx = wx + GLOBAL_WIND_X;
+                    let twy = wy + GLOBAL_WIND_Y;
+
+                    //decrement oxygen + maybe extinguish
+                    let wind_str = twx * twx + twy * twy;
+                    let next_oxy = (oxy - dt * OXYGEN_BURN_FACTOR / wind_str.max(1.0)).max(0.0);
+                    let next_fuel = (fuel - dt * FUEL_BURN_FACTOR).max(0.0);
+                    let next_moisture = (moisture - BURNING_MOISTURE_EVAPORATION_SPEED * dt).max(0.0);
+                    let mut next_fire = true;
+                    if ext < ext_chance {
+                        next_fire = false;
+                    }
+
+                    let mut burning_count = 0;
+
+                    for dy in -3..=3 {
+                        for dx in -3..=3 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+
+                            let nx = x as isize + dx;
+                            let ny = y as isize + dy;
+
+                            if nx < 0 || ny < 0
+                                || nx >= self.width as isize
+                                || ny >= self.height as isize
+                            {
+                                continue;
+                            }
+
+                            let ni = nx as usize + ny as usize * self.width;
+
+                            if self.cell_fire[ni] {
+                                burning_count += 1;
+                            }
+                        }
+                    }
+
+                    //maybe launch an ember into the air
+                    let heat = burning_count as f32 + (self.cell_o2[i] * self.cell_fuel[i] - self.cell_moisture[i]) * 10.0 / 34.0;
+
+                    let ember_launch = rng.random_range(0.0..1.0);
+                    let ember_chance = 1.0 - (1.0 - heat.powi(3)).powf(dt * EMBER_CHANCE_FACTOR);
+                    if ember_launch < ember_chance {
+                        let ember_power = rng.random_range(0.3..2.5);
+                        next.embers.push((((x as i32) + (twx * ember_power).round() as i32) as usize, ((y as i32 + (twy * ember_power).round() as i32) as i32) as usize));
+                    }
+
+                    //next.cells[i] = Cell::Land {fire: next_fire, o2: next_oxy, wind: (wx, wy), fuel: next_fuel, elevation, moisture: next_moisture};
+                    next.cell_fire[i] = next_fire;
+                    next.cell_o2[i] = next_oxy;
+                    next.cell_wind[i] = (wx, wy);
+                    next.cell_fuel[i] = next_fuel;
+                    next.cell_moisture[i] = next_moisture;
+                }
             }
         }
+        
 
         next.rng = rng;
         next
@@ -501,9 +505,7 @@ impl CellGrid {
         }
         let idx = self.coord_to_index(x, y);
 
-        if let Cell::Land { fire, .. } = &mut self.cells[idx] {
-            *fire = true;
-        }
+        self.cell_fire[idx] = true;
     }
 
     pub fn douse_fire(&mut self, x: usize, y: usize, dt: f32) {
@@ -512,49 +514,86 @@ impl CellGrid {
         }
         let idx = self.coord_to_index(x, y);
 
-        if let Cell::Land { fire, moisture, .. } = &mut self.cells[idx] {
-            *fire = false;
-            *moisture = 1.0;
-        }
+        self.cell_fire[idx] = false;
+        self.cell_moisture[idx] = 1.0;
     }
 }
 
 pub fn cell_grid_to_colors(grid: &CellGrid) -> Vec<f32> {
     let mut colors: Vec<f32> = vec![];
-    for c in &grid.cells {
-        colors.extend(Vec::from(cell_to_color(c)));
+    for i in 0..(grid.width * grid.height) {
+        colors.extend(Vec::from(cell_to_color(grid, i)));
     }
     colors
 }
 
 pub fn gen_grid(width: usize, height: usize) -> CellGrid {
-
-    let mut cells: Vec<Cell> = vec![];
+    let mut cell_land: Vec<bool> = vec![];
+    let mut cell_elevation: Vec<f32> = vec![];
 
     let seed = if TERRAIN_SEED > 0 {TERRAIN_SEED} else {rand::random::<u64>()};
 
     for i in 0..(width * height) {
 
-        let height = fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1, seed);
+        let height = fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), TERRAIN_SCALE, seed);
 
         if height < WATER_LEVEL / MAX_ELEVATION {
-            cells.push(Cell::Water);
+            //cells.push(Cell::Water);
+            cell_land.push(false);
+            cell_elevation.push(0.0);
         } else {
-
-            let wind = (
-                -(fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1, seed + 1) * 10.0 - 5.0), 
-                -(fbm((i as f32 % width as f32, (i as i32 / width as i32) as f32), 0.1, seed + 2) * 10.0 - 5.0));
-
-            cells.push(Cell::Land {fire: false, o2: 1.0, wind, fuel: 1.0, elevation: height * MAX_ELEVATION - WATER_LEVEL, moisture: 1.0});
-            
+            //cells.push(Cell::Land {fire: false, o2: 1.0, wind: (0.0, 0.0), fuel: 1.0, elevation: height * MAX_ELEVATION - WATER_LEVEL, moisture: 1.0});
+            cell_land.push(true);
+            cell_elevation.push(height * MAX_ELEVATION - WATER_LEVEL);
         }
     }
 
-    CellGrid {
+    let mut grid = CellGrid {
         width,
         height,
-        cells,
+        cell_land,
+        cell_elevation,
+        cell_fire: vec![false; width * height],
+        cell_fuel: vec![1.0; width * height],
+        cell_moisture: vec![1.0; width * height],
+        cell_o2: vec![1.0; width * height],
+        cell_wind: vec![(0.0, 0.0); width * height],
+        cell_slope_x_neg: vec![],
+        cell_slope_x_pos: vec![],
+        cell_slope_y_neg: vec![],
+        cell_slope_y_pos: vec![],
         rng: SmallRng::seed_from_u64(if FIRE_SEED > 0 {FIRE_SEED} else {rand::random::<u64>()}),
         embers: vec![],
+    };
+
+    //precalculate cell slopes
+    for i in 0..(width * height) {
+        let mut slope_neg_x = 0.0;
+        let mut slope_pos_x = 0.0;
+        let mut slope_neg_y = 0.0;
+        let mut slope_pos_y = 0.0;
+
+        let (x, y) = grid.index_to_coord(i);
+        let elev = grid.cell_elevation[i];
+
+        if x > 0 {
+            slope_neg_x = grid.cell_elevation[grid.coord_to_index(x-1, y)] - elev;
+        }
+        if x < grid.width - 1 {
+            slope_pos_x = grid.cell_elevation[grid.coord_to_index(x+1, y)] - elev;
+        }
+        if y > 0 {
+            slope_neg_y = grid.cell_elevation[grid.coord_to_index(x, y-1)] - elev;
+        }
+        if y > grid.height - 1 {
+            slope_pos_y = grid.cell_elevation[grid.coord_to_index(x, y+1)] - elev;
+        }
+
+        grid.cell_slope_x_neg.push(slope_neg_x);
+        grid.cell_slope_x_pos.push(slope_pos_x);
+        grid.cell_slope_y_neg.push(slope_neg_y);
+        grid.cell_slope_y_pos.push(slope_pos_y);
     }
+
+    grid
 }
